@@ -95,6 +95,7 @@ table.list th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color
   text-align:left;padding:8px 6px;border-bottom:2px solid var(--line)}
 table.list td{padding:9px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 table.list td.num,table.list th.num{text-align:right;font-variant-numeric:tabular-nums}
+table.list td.subhead{background:var(--green-bg);color:var(--green-dk);font-weight:800;letter-spacing:.03em}
 .tblwrap{overflow-x:auto}
 
 .empty{border:2px dashed var(--line);border-radius:var(--radius);padding:26px;text-align:center;
@@ -2595,7 +2596,7 @@ function renderReports() {
   }
   const recs = reportRecords();
   if (!recs.length) { out.innerHTML = `<div class="empty">No records in this date range.</div>`; return; }
-  const byChem = {}, byField = {}, byLl = {};
+  const byChem = {}, byField = {}, byLl = {}, byFieldChem = {};
   recs.forEach(r => {
     const acres = num(r.acres), gpa = num(r.gpa);
     const f = byField[r.fieldName] ??= { passes: 0, acres: 0, cost: 0 };
@@ -2608,12 +2609,15 @@ function renderReports() {
       l.llCost += o.cost != null ? num(o.cost) : num(r.totalCost) * num(o.share) / 100;
     });
     (r.chemicals || []).forEach(c => {
-      const ch = byChem[c.name || "—"] ??= { apps: 0, acres: 0, gal: 0, lb: 0, cost: 0 };
-      ch.apps++; ch.acres += acres;
       const b = baseUnit(c.unit);
       const qty = c.totalQty != null ? num(c.totalQty) : lineTotalQty(c, acres, gpa);
-      if (b in LIQ) ch.gal += qty * LIQ[b]; else if (b in DRY) ch.lb += qty * DRY[b];
-      ch.cost += c.total != null ? num(c.total) : lineTotalCost(c, acres, gpa);
+      const cost = c.total != null ? num(c.total) : lineTotalCost(c, acres, gpa);
+      const gal = b in LIQ ? qty * LIQ[b] : 0, lb = b in DRY ? qty * DRY[b] : 0;
+      const ch = byChem[c.name || "—"] ??= { apps: 0, acres: 0, gal: 0, lb: 0, cost: 0 };
+      ch.apps++; ch.acres += acres; ch.gal += gal; ch.lb += lb; ch.cost += cost;
+      const fc = (byFieldChem[r.fieldName] ??= {});
+      const fcc = fc[c.name || "—"] ??= { apps: 0, gal: 0, lb: 0, cost: 0 };
+      fcc.apps++; fcc.gal += gal; fcc.lb += lb; fcc.cost += cost;
     });
   });
   const chemRows = Object.entries(byChem).sort((a,b) => b[1].cost - a[1].cost).map(([n, v]) => `<tr>
@@ -2634,6 +2638,16 @@ function renderReports() {
       <tr><th>Product</th><th class="num">Uses</th><th class="num">Acres</th><th class="num">Total used</th><th class="num">Cost</th></tr>${chemRows}</table></div></div>
     <div class="card"><h2>By field</h2><div class="tblwrap"><table class="list">
       <tr><th>Field</th><th class="num">Passes</th><th class="num">Acres sprayed</th><th class="num">Cost</th><th class="num">Cost/ac</th></tr>${fieldRows}</table></div></div>
+    <div class="card"><h2>Product use by field</h2><div class="tblwrap"><table class="list">
+      <tr><th>Product</th><th class="num">Uses</th><th class="num">Amount applied</th><th class="num">Cost</th></tr>
+      ${Object.entries(byField).sort((a,b) => b[1].cost - a[1].cost).map(([fname]) => {
+        const prods = Object.entries(byFieldChem[fname] || {}).sort((a,b) => b[1].cost - a[1].cost);
+        return `<tr><td class="subhead" colspan="4">${esc(fname)}</td></tr>` +
+          prods.map(([pname, v]) => `<tr><td>${esc(pname)}</td><td class="num">${v.apps}</td>
+            <td class="num">${v.gal ? fmt0(v.gal) + " gal" : ""}${v.gal && v.lb ? " + " : ""}${v.lb ? fmt0(v.lb) + " lb" : ""}${!v.gal && !v.lb ? "—" : ""}</td>
+            <td class="num">${money(v.cost)}</td></tr>`).join("");
+      }).join("")}
+    </table></div></div>
     <div class="card"><h2>By owner</h2><div class="tblwrap"><table class="list">
       <tr><th>Owner</th><th class="num">Passes</th><th class="num">Total cost</th><th class="num">Owner share</th></tr>${llRows}</table></div></div>`;
 }
