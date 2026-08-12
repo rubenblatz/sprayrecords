@@ -2616,8 +2616,12 @@ function renderReports() {
       const ch = byChem[c.name || "—"] ??= { apps: 0, acres: 0, gal: 0, lb: 0, cost: 0 };
       ch.apps++; ch.acres += acres; ch.gal += gal; ch.lb += lb; ch.cost += cost;
       const fc = (byFieldChem[r.fieldName] ??= {});
-      const fcc = fc[c.name || "—"] ??= { apps: 0, gal: 0, lb: 0, cost: 0 };
+      const fcc = fc[c.name || "—"] ??= { apps: 0, gal: 0, lb: 0, cost: 0, tGal: 0, tLb: 0, own: {} };
       fcc.apps++; fcc.gal += gal; fcc.lb += lb; fcc.cost += cost;
+      const fs = num(r.farmerShare) / 100;
+      fcc.tGal += gal * fs; fcc.tLb += lb * fs;
+      owners.forEach(o => { const w = fcc.own[o.name] ??= { gal: 0, lb: 0 };
+        w.gal += gal * num(o.share) / 100; w.lb += lb * num(o.share) / 100; });
     });
   });
   const chemRows = Object.entries(byChem).sort((a,b) => b[1].cost - a[1].cost).map(([n, v]) => `<tr>
@@ -2638,14 +2642,44 @@ function renderReports() {
       <tr><th>Product</th><th class="num">Uses</th><th class="num">Acres</th><th class="num">Total used</th><th class="num">Cost</th></tr>${chemRows}</table></div></div>
     <div class="card"><h2>By field</h2><div class="tblwrap"><table class="list">
       <tr><th>Field</th><th class="num">Passes</th><th class="num">Acres sprayed</th><th class="num">Cost</th><th class="num">Cost/ac</th></tr>${fieldRows}</table></div></div>
-    <div class="card"><h2>Product use by field</h2><div class="tblwrap"><table class="list">
-      <tr><th>Product</th><th class="num">Uses</th><th class="num">Amount applied</th><th class="num">Cost</th></tr>
+    <div class="card"><h2>Product use by field</h2>
+    <p class="hint">Amounts split by each record's ownership shares — Tenant is your share, Landlord is the owners'.</p>
+    <div class="tblwrap"><table class="list">
+      <tr><th>Product</th><th class="num">Uses</th><th class="num">Total</th><th class="num">Tenant</th><th class="num">Landlord</th><th class="num">Cost</th></tr>
       ${Object.entries(byField).sort((a,b) => b[1].cost - a[1].cost).map(([fname]) => {
+        const fmt4 = n => num(n).toLocaleString("en-US", { maximumFractionDigits: 3 });
+        const EPS = 0.0005;
+        const amt = (g, l) => ((g >= EPS ? fmt4(g) + " gal" : "") + (g >= EPS && l >= EPS ? " + " : "") + (l >= EPS ? fmt4(l) + " lb" : "")) || "—";
+        /* Consistent rounding: independently rounding total, tenant, and each owner to 1 decimal
+           can visibly disagree by 0.1 (e.g. 21.8 vs 14.5 + 7.2). When the true parts really do sum
+           to the total, round the total first and distribute it largest-remainder so the displayed
+           columns always add up. When shares don't total 100%, the mismatch is REAL — leave it. */
+        const reconcile = (total, parts) => {
+          const trueSum = parts.reduce((a, b) => a + b, 0);
+          if (Math.abs(trueSum - total) > 0.005) return parts;           // genuine mismatch: show honestly
+          const SC = 1000;                                                // 3-decimal display precision
+          const T = Math.round(total * SC);
+          const floors = parts.map(p => Math.floor(p * SC));
+          const rems = parts.map((p, i) => p * SC - floors[i]);
+          let give = T - floors.reduce((a, b) => a + b, 0);
+          [...rems.keys()].sort((a, b) => rems[b] - rems[a]).forEach(i => { if (give > 0) { floors[i]++; give--; } });
+          return floors.map(f => f / SC);
+        };
         const prods = Object.entries(byFieldChem[fname] || {}).sort((a,b) => b[1].cost - a[1].cost);
-        return `<tr><td class="subhead" colspan="4">${esc(fname)}</td></tr>` +
-          prods.map(([pname, v]) => `<tr><td>${esc(pname)}</td><td class="num">${v.apps}</td>
-            <td class="num">${v.gal ? fmt0(v.gal) + " gal" : ""}${v.gal && v.lb ? " + " : ""}${v.lb ? fmt0(v.lb) + " lb" : ""}${!v.gal && !v.lb ? "—" : ""}</td>
-            <td class="num">${money(v.cost)}</td></tr>`).join("");
+        return `<tr><td class="subhead" colspan="6">${esc(fname)}</td></tr>` +
+          prods.map(([pname, v]) => {
+            const ownNames = Object.keys(v.own);
+            const gParts = reconcile(v.gal, [v.tGal, ...ownNames.map(n => v.own[n].gal)]);
+            const lParts = reconcile(v.lb, [v.tLb, ...ownNames.map(n => v.own[n].lb)]);
+            const tG = gParts[0], tL = lParts[0];
+            const ownTxt = ownNames.map((n, i) => ({ n, g: gParts[i + 1], l: lParts[i + 1] }))
+              .filter(w => w.g >= EPS || w.l >= EPS)
+              .map(w => `${esc(w.n)} ${amt(w.g, w.l)}`).join(" + ") || "—";
+            return `<tr><td>${esc(pname)}</td><td class="num">${v.apps}</td>
+              <td class="num">${amt(v.gal, v.lb)}</td>
+              <td class="num">${amt(tG, tL)}</td>
+              <td class="num">${ownTxt}</td>
+              <td class="num">${money(v.cost)}</td></tr>`; }).join("");
       }).join("")}
     </table></div></div>
     <div class="card"><h2>By owner</h2><div class="tblwrap"><table class="list">
